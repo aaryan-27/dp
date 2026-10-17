@@ -10,7 +10,7 @@ const jakarta = Plus_Jakarta_Sans({
 
 export const metadata: Metadata = {
   // Your live URL, used for link previews on WhatsApp and social media.
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://www.thedeeptrading.in"),
   title: `${site.name} | Free Live Trading & Investing Webinar`,
   description: `Free live webinar on ${site.webinar.dateLabel} at ${site.webinar.timeLabel}. Learn SMC, market auction theory, institutional footprints and order flow for Indian & Forex markets.`,
 };
