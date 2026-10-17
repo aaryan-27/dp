@@ -1,20 +1,18 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Plus_Jakarta_Sans } from "next/font/google";
+import { site } from "@/components/sites/deep-trading/site";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const jakarta = Plus_Jakarta_Sans({
+  variable: "--font-jakarta",
   subsets: ["latin"],
 });
 
 export const metadata: Metadata = {
-  title: "Website Clone",
-  description: "Pixel-perfect website clone",
+  // Your live URL, used for link previews on WhatsApp and social media.
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
+  title: `${site.name} | Free Live Trading & Investing Webinar`,
+  description: `Free live webinar on ${site.webinar.dateLabel} at ${site.webinar.timeLabel}. Learn SMC, market auction theory, institutional footprints and order flow for Indian & Forex markets.`,
 };
 
 export default function RootLayout({
@@ -23,11 +21,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col">{children}</body>
+    <html lang="en" className={jakarta.variable} data-scroll-behavior="smooth">
+      <body>{children}</body>
     </html>
   );
 }
