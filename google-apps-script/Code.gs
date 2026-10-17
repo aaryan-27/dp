@@ -1,25 +1,23 @@
 /**
- * Deep Trading: webinar leads -> Google Sheet (+ email backup)
+ * Deep Trading: webinar leads -> Google Sheet + Gmail
  *
  * Paste this whole file into Extensions -> Apps Script of your leads Google Sheet.
  * Setup steps: see SETUP.md in this folder.
  *
- * The website's /api/register route POSTs each registration here as JSON.
- * Every lead is added as a new row in the "Leads" tab.
- * If the website could not send an email itself (Resend not set up or failed),
- * this script sends it from your Gmail instead, so no lead is ever missed.
+ * The website's /api/register route POSTs each registration here as JSON. This script:
+ *   1. adds the lead as a new row in the "Leads" tab
+ *   2. emails the attendee their confirmation, from the Gmail account that deployed this script
+ *   3. emails you a new-lead alert
+ * The email wording comes from the website (src/components/sites/deep-trading/emails.ts).
  */
+
+// Gmail allows about 100 emails a day on a free account, and each signup uses 2.
+// On a busy day, set this to false: you'll stop getting alerts, but attendees keep
+// getting confirmations and every lead is still saved in the sheet.
+var SEND_OWNER_ALERT = true;
 
 var SHEET_NAME = "Leads";
 var HEADERS = ["Registered (IST)", "Name", "Email", "WhatsApp", "Page", "utm_source", "utm_medium", "utm_campaign"];
-
-var WEBINAR = {
-  date: "Sunday, 25 October 2026",
-  time: "7:00 PM IST",
-  platform: "Google Meet & YouTube",
-  whatsappGroup: "https://chat.whatsapp.com/Hk7tMfTAGFo8meUSFRbfr8",
-  contact: "WhatsApp +91 95403 66555 or Telegram @deeptradezz",
-};
 
 function doPost(e) {
   var data;
@@ -51,8 +49,7 @@ function doPost(e) {
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
-    var sheet = getSheet();
-    sheet.appendRow([
+    getSheet().appendRow([
       Utilities.formatDate(new Date(), "Asia/Kolkata", "dd-MM-yyyy HH:mm:ss"),
       cell(lead.name),
       cell(lead.email),
@@ -66,63 +63,46 @@ function doPost(e) {
     lock.releaseLock();
   }
 
-  // 2. Backup emails. A failed email never undoes the saved row.
-  if (data.notifyOwner && data.notifyTo) {
+  // 2. Send the emails. A failed email never undoes the saved row.
+  var emailErrors = [];
+  var emails = Array.isArray(data.emails) ? data.emails.slice(0, 2) : [];
+  emails.forEach(function (m) {
+    if (!m || typeof m.to !== "string" || typeof m.subject !== "string") return;
+    if (m.isOwnerAlert && !SEND_OWNER_ALERT) return;
+    var text = str(m.text, 20000);
+    var html = str(m.html, 100000);
+    if (m.isOwnerAlert) {
+      var sheetUrl = SpreadsheetApp.getActiveSpreadsheet().getUrl();
+      text += "\n\nAll leads: " + sheetUrl;
+      html += '<p style="font-family:Arial,sans-serif;font-size:14px"><a href="' + sheetUrl + '">Open all leads</a></p>';
+    }
     try {
       MailApp.sendEmail({
-        to: data.notifyTo,
-        replyTo: lead.email,
-        subject: "New webinar signup: " + lead.name,
-        body: [
-          "Name: " + lead.name,
-          "Email: " + lead.email,
-          "WhatsApp: " + lead.phone,
-          "Registered: " + Utilities.formatDate(new Date(), "Asia/Kolkata", "dd MMM yyyy, h:mm a") + " IST",
-          lead.utmSource ? "Source: " + [lead.utmSource, lead.utmMedium, lead.utmCampaign].filter(String).join(" / ") : null,
-          "",
-          "All leads: " + SpreadsheetApp.getActiveSpreadsheet().getUrl(),
-        ].filter(function (l) { return l !== null; }).join("\n"),
+        to: m.to,
+        replyTo: typeof m.replyTo === "string" ? m.replyTo : undefined,
+        name: m.isOwnerAlert ? "Deep Trading Leads" : "Deep Trading",
+        subject: str(m.subject, 250),
+        body: text,
+        htmlBody: html || undefined,
       });
     } catch (err) {
-      console.error("Owner email failed: " + err);
+      console.error("Email to " + m.to + " failed: " + err);
+      emailErrors.push(String(err));
     }
-  }
+  });
 
-  if (data.sendConfirmation) {
-    try {
-      var firstName = lead.name.split(" ")[0];
-      MailApp.sendEmail({
-        to: lead.email,
-        name: "Deep Trading",
-        subject: "You're in: Deep Trading free webinar, " + WEBINAR.date,
-        body: [
-          "Hi " + firstName + ",",
-          "",
-          "Your free seat for the Trading & Investing Webinar is confirmed.",
-          "",
-          "Date: " + WEBINAR.date,
-          "Time: " + WEBINAR.time,
-          "Where: Live on " + WEBINAR.platform,
-          "",
-          "Joining links are shared in our WhatsApp group. Join now so you don't miss them:",
-          WEBINAR.whatsappGroup,
-          "",
-          "Questions? " + WEBINAR.contact + ".",
-          "",
-          "Deep Trading: Plan Your Trade, Trade Your Plan",
-        ].join("\n"),
-      });
-    } catch (err) {
-      console.error("Confirmation email failed: " + err);
-    }
-  }
-
-  return json({ ok: true });
+  return json({ ok: true, emailErrors: emailErrors });
 }
 
 // Opening the web app URL in a browser shows this, which is handy for checking the deployment.
 function doGet() {
   return json({ ok: true, service: "deep-trading-leads" });
+}
+
+// Run this once from the editor (select "authorize" -> Run) to grant Sheets + Gmail access.
+function authorize() {
+  getSheet();
+  console.log("Emails left today: " + MailApp.getRemainingDailyQuota());
 }
 
 function getSheet() {
@@ -140,7 +120,7 @@ function str(value, max) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
-// Store as plain text: stops "+91..." being read as a number and blocks formula injection.
+// Store as plain text and block formula injection (values starting with = + - @).
 function cell(value) {
   return /^[=+\-@]/.test(value) ? "'" + value : value;
 }

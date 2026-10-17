@@ -1,4 +1,3 @@
-import { Resend } from "resend";
 import { confirmationEmail, signupNotification, type Registration } from "@/components/sites/deep-trading/emails";
 import { site } from "@/components/sites/deep-trading/site";
 
@@ -36,42 +35,34 @@ function pageDetails(page: string) {
   }
 }
 
-async function sendEmails(apiKey: string, registration: Registration, notifyTo: string) {
-  const resend = new Resend(apiKey);
-  const from = process.env.RESEND_FROM ?? `${site.name} <onboarding@resend.dev>`;
+// Sends the lead to the Google Apps Script (see google-apps-script/SETUP.md), which adds it
+// to the Google Sheet and sends both emails from Gmail.
+async function saveLead(webhookUrl: string, secret: string, lead: Lead) {
+  const { name, email, phone } = lead;
+  const registration = { name, email, phone };
+  const notifyTo = process.env.REGISTRATION_NOTIFY_EMAIL || site.email;
 
-  const [attendee, owner] = await Promise.allSettled([
-    resend.emails.send({ from, to: registration.email, replyTo: site.email, ...confirmationEmail(registration) }),
-    resend.emails.send({ from, to: notifyTo, replyTo: registration.email, ...signupNotification(registration) }),
-  ]);
-
-  const failed = (r: typeof attendee) => r.status === "rejected" || Boolean(r.value.error);
-  if (failed(attendee)) console.error("[register] confirmation email failed", attendee.status === "rejected" ? attendee.reason : attendee.value.error);
-  if (failed(owner)) console.error("[register] signup notification failed", owner.status === "rejected" ? owner.reason : owner.value.error);
-  return { attendeeEmailed: !failed(attendee), ownerNotified: !failed(owner) };
-}
-
-// Adds the lead as a row in the Google Sheet (see google-apps-script/SETUP.md).
-// Any email Resend couldn't send is sent by the script from Gmail instead.
-async function saveToSheet(
-  webhookUrl: string,
-  secret: string,
-  lead: Lead,
-  backup: { notifyTo: string; notifyOwner: boolean; sendConfirmation: boolean },
-) {
   try {
     const res = await fetch(webhookUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...lead, ...backup, secret }),
-      signal: AbortSignal.timeout(15_000),
+      body: JSON.stringify({
+        ...lead,
+        secret,
+        emails: [
+          { to: email, replyTo: site.email, ...confirmationEmail(registration) },
+          { to: notifyTo, replyTo: email, ...signupNotification(registration), isOwnerAlert: true },
+        ],
+      }),
+      signal: AbortSignal.timeout(20_000),
       cache: "no-store",
     });
-    const result = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+    const result = (await res.json().catch(() => null)) as { ok?: boolean; error?: string; emailErrors?: string[] } | null;
     if (!res.ok || !result?.ok) {
       console.error("[register] Google Sheet save failed", res.status, result?.error ?? "non-JSON response");
       return false;
     }
+    if (result.emailErrors?.length) console.error("[register] saved, but Gmail could not send:", result.emailErrors);
     return true;
   } catch (err) {
     console.error("[register] Google Sheet save failed", err);
@@ -86,37 +77,19 @@ export async function POST(request: Request) {
     return Response.json({ error: lead }, { status: 400 });
   }
 
-  const apiKey = process.env.RESEND_API_KEY;
   const webhookUrl = process.env.LEADS_WEBHOOK_URL;
   const secret = process.env.LEADS_SECRET;
-  const sheetReady = Boolean(webhookUrl && secret);
-  const notifyTo = process.env.REGISTRATION_NOTIFY_EMAIL ?? site.email;
-
-  if (!apiKey && !sheetReady) {
+  if (!webhookUrl || !secret) {
     if (process.env.NODE_ENV !== "production") {
-      console.warn("[register] Neither RESEND_API_KEY nor LEADS_WEBHOOK_URL/LEADS_SECRET is set; lead not saved:", lead.email);
-      return Response.json({ ok: true, emailed: false });
+      console.warn("[register] LEADS_WEBHOOK_URL / LEADS_SECRET not set; lead not saved:", lead.email);
+      return Response.json({ ok: true });
     }
-    console.error("[register] No lead destination configured: set LEADS_WEBHOOK_URL + LEADS_SECRET and/or RESEND_API_KEY");
-    return Response.json({ error: "Registration is temporarily unavailable." }, { status: 500 });
+    console.error("[register] LEADS_WEBHOOK_URL and LEADS_SECRET must be set (see google-apps-script/SETUP.md)");
+    return Response.json({ error: "Registration is temporarily unavailable. Please message us on WhatsApp." }, { status: 500 });
   }
 
-  const { name, email, phone } = lead;
-  const emails = apiKey
-    ? await sendEmails(apiKey, { name, email, phone }, notifyTo)
-    : { attendeeEmailed: false, ownerNotified: false };
-
-  const savedToSheet = webhookUrl && secret
-    ? await saveToSheet(webhookUrl, secret, lead, {
-        notifyTo,
-        notifyOwner: !emails.ownerNotified,
-        sendConfirmation: !emails.attendeeEmailed,
-      })
-    : false;
-
-  // Accept the registration if the lead landed anywhere, so it is never lost silently.
-  if (!savedToSheet && !emails.attendeeEmailed && !emails.ownerNotified) {
+  if (!(await saveLead(webhookUrl, secret, lead))) {
     return Response.json({ error: "We couldn't complete your registration. Please try again or message us on WhatsApp." }, { status: 502 });
   }
-  return Response.json({ ok: true, emailed: emails.attendeeEmailed || savedToSheet });
+  return Response.json({ ok: true });
 }
