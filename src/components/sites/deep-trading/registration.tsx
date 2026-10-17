@@ -58,7 +58,8 @@ function RegistrationDialog({ onClose }: { onClose: () => void }) {
     event.preventDefault();
     setStatus("sending");
     setError("");
-    const data = Object.fromEntries(new FormData(event.currentTarget));
+    // Include the page URL so ad-campaign tags (utm_*) reach the leads sheet.
+    const data = { ...Object.fromEntries(new FormData(event.currentTarget)), page: window.location.href };
     try {
       const res = await fetch("/api/register", {
         method: "POST",
